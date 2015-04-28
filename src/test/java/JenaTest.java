@@ -3,6 +3,7 @@ import java.util.*;
 import com.hp.hpl.jena.ontology.*;
 import com.hp.hpl.jena.rdf.model.*;
 import com.hp.hpl.jena.reasoner.*;
+import com.hp.hpl.jena.vocabulary.*;
 import org.apache.jena.riot.RDFDataMgr;
 import org.junit.*;
 
@@ -38,13 +39,20 @@ public class JenaTest {
         model = loadModelFromResources(dataPath);
 
         // build inferred model
-        Reasoner reasoner = ReasonerRegistry.getOWLReasoner();  // build generic?
-        reasoner.bindSchema(ontology);
+        Reasoner reasoner = ReasonerRegistry.getRDFSReasoner();
+        reasoner = reasoner.bindSchema(ontology);
+
         infm = ModelFactory.createInfModel(reasoner, model);
     }
 
     /**
      *  Test what happens with Model / Ontology if InfModel changes
+     *
+     *  ...Having bound a Model into an InfModel by using a Reasoner its content
+     *  can still be changed by the normal add and remove calls to the InfModel.
+     *  Any such change the model will usually cause all current deductions and
+     *  temporary rules to be discarded and inference will start again from
+     *  scratch at the next query..
      */
     @Test
     public void testChangeInfModel() throws Exception {
@@ -78,6 +86,14 @@ public class JenaTest {
 
     /**
      *  Test what happens with InfModel if Model changes
+     *
+     *  from https://jena.apache.org/documentation/inference/
+     *
+     *  ...There are times when the data in a model bound into an InfModel can is changed
+     *  "behind the scenes" instead of through calls to the InfModel. If this occurs
+     *  the result of future queries to the InfModel are unpredictable. To overcome
+     *  this and force the InfModel to reconsult the raw data use the InfModel.rebind()
+     *  call..
      */
     @Test
     public void testChangeModel() throws Exception {
@@ -113,24 +129,32 @@ public class JenaTest {
         UpdateVarListener lsn = new UpdateVarListener();
         infm.register(lsn);
 
-        Resource res = ResourceFactory.createResource(UUID.randomUUID().toString());
         String foaf = ontology.getNsPrefixMap().get("foaf");
 
-        Literal foo = ResourceFactory.createPlainLiteral("foo");
-        Statement st = ResourceFactory.createStatement(res, ontology.getOntProperty(foaf + "name"), foo);
+        // create a super-Property to query for it later
+        Property sp = ontology.createProperty(foaf, "attribute");
+        Property kp = ontology.getProperty(foaf + "name");
+        ontology.add(kp, RDFS.subPropertyOf, sp);
 
-        // add triple
-        ontology.add(st);
+        Resource tblRes = infm.getResource(tbl);
 
-        assert !model.contains(st);
-        assert ontology.contains(st);
-        assert !infm.contains(st); // WTF?
-        assert !lsn.hasChanged(); // WTF?
+        // new inferences are not in the graph
+        assert tblRes.getProperty(sp) == null;
+        assert !lsn.hasChanged();
 
         infm.rebind();
 
-        assert !infm.contains(st); // WTF?
-        assert !lsn.hasChanged(); // WTF?
+        // even after rebind
+        assert tblRes.getProperty(sp) == null;
+        assert !lsn.hasChanged();
 
+        // only full replace of InfModel can work
+        Reasoner reasoner = ReasonerRegistry.getRDFSReasoner();
+        reasoner = reasoner.bindSchema(ontology);
+
+        infm = ModelFactory.createInfModel(reasoner, model);
+        tblRes = infm.getResource(tbl);
+
+        assert tblRes.getProperty(sp) != null;
     }
 }
